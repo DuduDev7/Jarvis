@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<style>
+  html,body{margin:0;height:100%;background:#020b14;color:#7fdcff;font-family:'Courier New',monospace;overflow:hidden}
+  canvas{position:fixed;inset:0;width:100%;height:100%}
+  #ui{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:20px;box-sizing:border-box}
+  #log{width:min(640px,100%);max-height:30vh;overflow:auto;font-size:14px;line-height:1.5;text-shadow:0 0 6px #19b5ff80}
+  #log .v{color:#b8f0ff;opacity:.7}#log .j{color:#19b5ff}
+  #bar{display:flex;gap:8px;width:min(640px,100%);margin-top:10px}
+  input{flex:1;background:#04202f99;border:1px solid #19b5ff80;color:#b8f0ff;padding:10px;border-radius:6px;font:inherit;outline:none}
+  button{background:#04202f;border:1px solid #19b5ff;color:#19b5ff;padding:10px 14px;border-radius:6px;cursor:pointer;font:inherit}
+  button.on{background:#19b5ff;color:#020b14}
+  #st{position:fixed;top:16px;left:0;right:0;text-align:center;letter-spacing:6px;font-size:13px;opacity:.8}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="st">J.A.R.V.I.S. — EM ESPERA</div>
+<div id="ui">
+  <div id="log"></div>
+  <div id="bar">
+    <input id="i" placeholder='Digite ou diga "Jarvis, ..."' autocomplete="off">
+    <button id="mic">🎤 ATIVAR</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const WAKE = 'jarvis';
+let state = 'idle', ouvindo = false, ocupado = false, rec = null;
+const cores = { idle: '#19b5ff', listening: '#4df3ff', thinking: '#ffb347', speaking: '#7dffb3' };
+const nomes = { idle: 'EM ESPERA', listening: 'ESCUTANDO', thinking: 'PROCESSANDO', speaking: 'FALANDO' };
+
+function add(cls, txt) {
+  const d = document.createElement('div');
+  d.className = cls; d.textContent = (cls === 'v' ? '> ' : 'JARVIS: ') + txt;
+  $('#log').appendChild(d); $('#log').scrollTop = 1e9;
+}
+function setState(s) { state = s; $('#st').textContent = 'J.A.R.V.I.S. — ' + nomes[s]; }
+
+function falar(t) {
+  return new Promise(res => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = 'pt-BR';
+    const v = speechSynthesis.getVoices().find(v => v.lang.startsWith('pt'));
+    if (v) u.voice = v;
+    u.onend = u.onerror = res;
+    setState('speaking'); speechSynthesis.speak(u);
+  });
+}
+
+async function perguntar(texto) {
+  if (ocupado) return;
+  ocupado = true; add('v', texto); setState('thinking');
+  try {
+    const r = await fetch('/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: texto }) });
+    const d = await r.json();
+    add('j', d.fala); await falar(d.fala);
+  } catch (e) { add('j', 'Erro: ' + e.message); }
+  ocupado = false; setState(ouvindo ? 'listening' : 'idle');
+}
+
+// Voz (use Chrome ou Edge)
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function iniciarVoz() {
+  if (!SR) return alert('Use Chrome ou Edge para reconhecimento de voz.');
+  rec = new SR(); rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = false;
+  rec.onresult = e => {
+    if (ocupado) return;
+    const t = e.results[e.results.length - 1][0].transcript.trim();
+    const i = t.toLowerCase().indexOf(WAKE);
+    if (i < 0) return;
+    const depois = t.slice(i + WAKE.length).replace(/^[\s,.:!]+/, '');
+    const cmd = depois || t.slice(0, i).replace(/[\s,.:!]+$/, '');
+    cmd ? perguntar(cmd) : (ocupado = true, falar('Pois não?').then(() => { ocupado = false; setState('listening'); }));
+  };
+  rec.onend = () => { if (ouvindo) try { rec.start(); } catch {} };
+  rec.start();
+}
+$('#mic').onclick = () => {
+  ouvindo = !ouvindo;
+  $('#mic').classList.toggle('on', ouvindo);
+  $('#mic').textContent = ouvindo ? '🎤 OUVINDO' : '🎤 ATIVAR';
+  if (ouvindo) { iniciarVoz(); setState('listening'); } else { rec && rec.stop(); setState('idle'); }
+};
+$('#i').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.value.trim()) { perguntar(e.target.value.trim()); e.target.value = ''; }
+});
+speechSynthesis.onvoiceschanged = () => {};
+
+// HUD
+const c = $('#c'), x = c.getContext('2d'); let t = 0;
+function draw() {
+  c.width = innerWidth; c.height = innerHeight;
+  const cx = c.width / 2, cy = c.height * 0.4, R = Math.min(c.width, c.height) * 0.22;
+  const col = cores[state], pulso = state === 'speaking' ? Math.sin(t * 8) * 6 : state === 'thinking' ? Math.sin(t * 4) * 3 : 0;
+  x.clearRect(0, 0, c.width, c.height);
+  x.strokeStyle = col; x.shadowColor = col; x.shadowBlur = 14;
+  [[1, 3, 1, 0.9], [0.82, 10, -1.6, 0.6], [0.64, 2, 2.4, 0.8], [0.46, 14, -0.8, 0.5]].forEach(([k, seg, vel, a], n) => {
+    x.globalAlpha = a; x.lineWidth = n % 2 ? 2 : 3;
+    const r = R * k + pulso, step = Math.PI * 2 / seg;
+    for (let s = 0; s < seg; s++) {
+      x.beginPath(); x.arc(cx, cy, r, t * vel + s * step, t * vel + s * step + step * 0.7); x.stroke();
+    }
+  });
+  x.globalAlpha = 1; x.fillStyle = col; x.beginPath(); x.arc(cx, cy, R * 0.18 + pulso / 2, 0, 7); x.fill();
+  t += 0.01; requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
